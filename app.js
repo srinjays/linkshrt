@@ -6,9 +6,15 @@
 'use strict';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'linkshort_links_v2';
+// Storage key is per-user so each account has isolated links
 const TOAST_DURATION = 3000;
 const SEARCH_DEBOUNCE = 200;
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+// Auth.getSession() is provided by auth.js (loaded before app.js)
+const currentUser = Auth.getSession();
+if (!currentUser) { window.location.replace('auth.html'); }
+const STORAGE_KEY = `linkshrt_links_v3_${currentUser.id}`;
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let links = [];
@@ -691,12 +697,38 @@ function initNavPills() {
   }
 }
 
+// ─── Auth UI ──────────────────────────────────────────────────────────────────
+function initAuth() {
+  // Populate user chip in navbar
+  const avatarEl = document.getElementById('nav-user-avatar');
+  const usernameEl = document.getElementById('nav-username');
+  if (avatarEl) avatarEl.textContent = (currentUser.username || 'U')[0].toUpperCase();
+  if (usernameEl) usernameEl.textContent = currentUser.username || currentUser.email.split('@')[0];
+
+  // Logout button
+  const logoutBtn = document.getElementById('btn-logout');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      Auth.logout(); // clears session + redirects to auth.html
+    });
+  }
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 function init() {
+  initAuth();
   loadLinks();
   checkRedirect();
   renderDashboard();
   initNavPills();
+
+  // Welcome toast on fresh login (loginAt within last 5 seconds)
+  try {
+    const loginTime = new Date(currentUser.loginAt).getTime();
+    if (Date.now() - loginTime < 5000) {
+      setTimeout(() => showToast(`👋 Welcome back, ${currentUser.username}!`, 'success'), 400);
+    }
+  } catch (e) { }
 }
 
 init();
