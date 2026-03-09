@@ -906,7 +906,7 @@ body {
   background: var(--glass-bg-hover);
   border-color: var(--glass-border-hover);
   transform: translateY(-2px);
-  board-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
 }
 
 .link-card:hover::before {
@@ -1069,6 +1069,15 @@ body {
 .ts-dot {
   color: var(--text-muted);
   font-size: 0.6rem;
+}
+
+/* Highlighted when same URL shortened multiple times */
+.shorten-count-ts.multi-shorten {
+  color: var(--accent-amber) !important;
+}
+
+.shorten-count-ts.multi-shorten svg {
+  opacity: 1;
 }
 
 /* ── Click Limit Bar ── */

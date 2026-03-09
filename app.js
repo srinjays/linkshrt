@@ -237,6 +237,12 @@ function renderDashboard() {
 
   const maxClicks = Math.max(...filtered.map(l => l.clicks), 1);
 
+  // Count how many times each original URL has been shortened (across ALL links, not just filtered)
+  const shortenCounts = links.reduce((map, l) => {
+    map[l.originalUrl] = (map[l.originalUrl] || 0) + 1;
+    return map;
+  }, {});
+
   linksGrid.innerHTML = filtered.map((link, i) => {
     const shortUrl = `${getBaseUrl()}?ls=${link.slug}`;
     const status = getLinkStatus(link);
@@ -285,6 +291,11 @@ function renderDashboard() {
             <span class="link-ts">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               Last accessed: ${timeAgo(link.lastAccessedAt)}
+            </span>
+            <span class="ts-dot">·</span>
+            <span class="link-ts shorten-count-ts ${(shortenCounts[link.originalUrl] || 1) > 1 ? 'multi-shorten' : ''}">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+              Shortened ${shortenCounts[link.originalUrl] === 1 ? 'once' : `${shortenCounts[link.originalUrl]}x`}
             </span>
           </div>
         </div>
