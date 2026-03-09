@@ -317,12 +317,52 @@ body {
   color: var(--white);
 }
 
-.gradient-text {
-  background: var(--gradient-main);
+/* ── Animated Shiny Text — pure-CSS port of framer-motion AnimatedText ── */
+@keyframes shimmer-sweep {
+  0% {
+    background-position: -200% center;
+  }
+
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.shimmer-text {
+  /* Gradient: dark → bright white → dark, wide enough to sweep */
+  background: linear-gradient(90deg,
+      rgba(255, 255, 255, 0.30) 0%,
+      rgba(255, 255, 255, 0.95) 20%,
+      #ffffff 35%,
+      rgba(255, 255, 255, 0.95) 50%,
+      rgba(255, 255, 255, 0.30) 70%,
+      rgba(255, 255, 255, 0.15) 100%);
+  background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+
+  /* Continuous sweep — matches framer-motion's "repeat: Infinity, repeatType: reverse" */
+  animation:
+    fadeInDown 0.7s ease 0.1s both,
+    shimmer-sweep 3s linear 0.8s infinite alternate;
 }
+
+/* Line 2 starts its shimmer half a cycle later for a staggered wave feel */
+.shimmer-text--delay {
+  animation:
+    fadeInDown 0.7s ease 0.1s both,
+    shimmer-sweep 3s linear 2.3s infinite alternate;
+}
+
+/* Hover: brighten the shine on either line */
+.hero-title:hover .shimmer-text,
+.hero-title:hover .shimmer-text--delay {
+  animation:
+    shimmer-sweep 1.4s linear infinite alternate;
+  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.25));
+}
+
 
 .hero-subtitle {
   font-size: 1.05rem;
