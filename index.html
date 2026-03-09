@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LinkShrt — Smart URL Shortener & Analytics</title>
     <meta name="description"
-        content="Shorten long URLs into clean, trackable links. Monitor click analytics and manage all your shortened links in one dashboard." />
+        content="Shorten long URLs into clean, trackable links. Set click limits, enable/disable links, and monitor analytics in one dashboard." />
     <meta property="og:title" content="LinkShrt — Smart URL Shortener" />
     <meta property="og:description" content="Turn long URLs into powerful short links with real-time analytics." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -24,14 +24,13 @@
         <iframe src="https://my.spline.design/gitnesssplinetest-67efIJZ9rJH4AFA7Qhl2vho2/" frameborder="0"
             loading="eager" title="Background 3D animation" class="spline-iframe" allow="autoplay"></iframe>
     </div>
-
-    <!-- ── Overlay tint to ensure text readability over Spline ── -->
     <div class="spline-overlay" aria-hidden="true"></div>
 
-    <!-- ── Redirect Overlay ── -->
-    <div id="redirect-overlay" class="redirect-overlay hidden" role="dialog" aria-modal="true"
-        aria-labelledby="redirect-title">
-        <div class="redirect-card glass-card">
+    <!-- ── Redirect Overlay (3 states) ── -->
+    <div id="redirect-overlay" class="redirect-overlay hidden" role="dialog" aria-modal="true">
+
+        <!-- State: Normal redirect -->
+        <div class="redirect-card glass-card" id="redirect-state-normal">
             <div class="redirect-icon">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -45,18 +44,47 @@
             <div class="redirect-progress">
                 <div class="redirect-progress-bar" id="redirect-bar"></div>
             </div>
-            <p class="redirect-note">If you are not redirected automatically, <a id="redirect-link" href="#">click
-                    here</a>.</p>
+            <p class="redirect-note">Not redirected? <a id="redirect-link" href="#">Click here</a></p>
         </div>
+
+        <!-- State: Link Disabled -->
+        <div class="redirect-card glass-card redirect-state-alt hidden" id="redirect-state-disabled">
+            <div class="redirect-icon-alt disabled">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                </svg>
+            </div>
+            <h2>Link Inactive</h2>
+            <p class="redirect-desc">This short link has been temporarily disabled by its creator and is not currently
+                accepting visitors.</p>
+            <a href="index.html" class="btn-go-home">← Go to LinkShrt</a>
+        </div>
+
+        <!-- State: Link Expired (click limit reached) -->
+        <div class="redirect-card glass-card redirect-state-alt hidden" id="redirect-state-expired">
+            <div class="redirect-icon-alt expired">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                </svg>
+            </div>
+            <h2>Link Expired</h2>
+            <p class="redirect-desc">This link has reached its maximum click limit and is no longer accepting new
+                visitors.</p>
+            <a href="index.html" class="btn-go-home">← Go to LinkShrt</a>
+        </div>
+
     </div>
 
-    <!-- ── Toast Notification ── -->
+    <!-- ── Toast ── -->
     <div id="toast" class="toast" role="alert" aria-live="polite"></div>
 
     <!-- ── Header / Nav ── -->
     <header class="header">
         <nav class="nav container">
-            <!-- Logo -->
             <a href="index.html" class="logo" id="logo-link">
                 <span class="logo-icon">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -67,8 +95,6 @@
                 </span>
                 <span class="logo-text">Link<span class="accent">Shrt</span></span>
             </a>
-
-            <!-- Centre Nav Links -->
             <div class="nav-center">
                 <a href="#hero-title" class="nav-pill active-pill" id="nav-home">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -96,12 +122,9 @@
                     Analytics
                 </a>
             </div>
-
-            <!-- Right Actions -->
             <div class="nav-actions">
                 <div class="nav-stat-chip">
-                    <span id="nav-stat-count">0</span>
-                    <span>links</span>
+                    <span id="nav-stat-count">0</span><span>links</span>
                 </div>
                 <button class="btn-clear-all" id="btn-clear-all" title="Clear all links">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -118,21 +141,23 @@
     </header>
 
     <main>
-        <!-- ── Hero Section ── -->
+        <!-- ── Hero ── -->
         <section class="hero" id="hero-title" aria-labelledby="hero-heading">
             <div class="container hero-inner">
-                <div class="hero-badge">✦ Free URL Shortener</div>
+                <div class="hero-badge">✦ Round 2 — Link Management</div>
                 <h1 id="hero-heading" class="hero-title">
-                    Shorten. Share.<br />
+                    Shorten. Control.<br />
                     <span class="gradient-text">Track Everything.</span>
                 </h1>
                 <p class="hero-subtitle">
-                    Transform long, unwieldy URLs into clean short links. Track clicks, analyze traffic, and manage all
-                    your links in one elegant dashboard.
+                    Create short links with click limits, toggle them on/off, edit destinations, and monitor when they
+                    were last accessed — all in one dashboard.
                 </p>
 
-                <!-- Shortener Form -->
+                <!-- ── Shorten Form ── -->
                 <form id="shorten-form" class="shorten-form glass-card" novalidate aria-label="URL shortener form">
+
+                    <!-- Row 1: URL + Alias -->
                     <div class="form-row">
                         <div class="input-wrapper" id="input-wrapper">
                             <span class="input-icon" aria-hidden="true">
@@ -146,8 +171,7 @@
                             <input type="url" id="url-input" class="url-input" placeholder="Paste your long URL here…"
                                 autocomplete="off" spellcheck="false" aria-label="URL to shorten"
                                 aria-describedby="url-error" aria-required="true" />
-                            <button type="button" class="input-clear" id="input-clear" aria-label="Clear input"
-                                title="Clear">
+                            <button type="button" class="input-clear" id="input-clear" aria-label="Clear input">
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                     stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
                                     stroke-linejoin="round">
@@ -163,7 +187,28 @@
                                 spellcheck="false" aria-label="Custom alias (optional)" />
                         </div>
                     </div>
+
+                    <!-- Row 2: Click Limit -->
+                    <div class="form-row form-row-options">
+                        <div class="option-field">
+                            <span class="option-label">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <polyline points="12 6 12 12 16 14" />
+                                </svg>
+                                Click Limit
+                            </span>
+                            <input type="number" id="limit-input" class="option-input" min="1" max="9999999"
+                                placeholder="No limit (optional)" aria-label="Maximum click limit" />
+                        </div>
+                        <p class="option-hint">Leave blank for unlimited. When the limit is hit, the link stops
+                            redirecting.</p>
+                    </div>
+
                     <p id="url-error" class="input-error" role="alert" aria-live="assertive"></p>
+
                     <button type="submit" class="btn-shorten" id="btn-shorten">
                         <span class="btn-text">Shorten URL</span>
                         <span class="btn-icon" aria-hidden="true">
@@ -176,7 +221,7 @@
                     </button>
                 </form>
 
-                <!-- Result Card -->
+                <!-- ── Result Card ── -->
                 <div id="result-card" class="result-card glass-card hidden" role="region"
                     aria-label="Shortened URL result" aria-live="polite">
                     <div class="result-success-badge">
@@ -192,7 +237,7 @@
                             <a id="result-short-url" href="#" class="result-short-url mono" target="_blank"
                                 rel="noopener noreferrer"></a>
                             <button class="btn-copy" id="btn-copy" title="Copy to clipboard"
-                                aria-label="Copy short URL to clipboard">
+                                aria-label="Copy short URL">
                                 <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
                                     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                     stroke-linejoin="round">
@@ -214,7 +259,7 @@
                     </div>
                 </div>
 
-                <!-- Stats Strip -->
+                <!-- ── Stats Strip ── -->
                 <div class="stats-strip glass-card">
                     <div class="stat-item">
                         <span class="stat-value" id="stat-total-links">0</span>
@@ -227,6 +272,11 @@
                     </div>
                     <div class="stat-divider" aria-hidden="true"></div>
                     <div class="stat-item">
+                        <span class="stat-value" id="stat-active-links">0</span>
+                        <span class="stat-label">Active Links</span>
+                    </div>
+                    <div class="stat-divider" aria-hidden="true"></div>
+                    <div class="stat-item">
                         <span class="stat-value" id="stat-top-link">—</span>
                         <span class="stat-label">Top Link Clicks</span>
                     </div>
@@ -234,13 +284,13 @@
             </div>
         </section>
 
-        <!-- ── Dashboard Section ── -->
+        <!-- ── Dashboard ── -->
         <section class="dashboard" id="dashboard" aria-labelledby="dashboard-title">
             <div class="container">
                 <div class="dashboard-header">
                     <div>
                         <h2 id="dashboard-title" class="section-title">Your Links</h2>
-                        <p class="section-subtitle">Manage and monitor all your shortened URLs</p>
+                        <p class="section-subtitle">Manage, monitor and control all your shortened URLs</p>
                     </div>
                     <div class="dashboard-controls">
                         <div class="search-wrapper">
@@ -258,10 +308,15 @@
                             <option value="most-clicks">Most Clicks</option>
                             <option value="least-clicks">Least Clicks</option>
                         </select>
+                        <select id="filter-select" class="sort-select" aria-label="Filter links by status">
+                            <option value="all">All Links</option>
+                            <option value="active">Active Only</option>
+                            <option value="disabled">Disabled Only</option>
+                            <option value="expired">Expired Only</option>
+                        </select>
                     </div>
                 </div>
 
-                <!-- Empty State -->
                 <div id="empty-state" class="empty-state hidden glass-card">
                     <div class="empty-icon" aria-hidden="true">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -273,8 +328,6 @@
                     <h3>No links yet</h3>
                     <p>Shorten your first URL above to get started!</p>
                 </div>
-
-                <!-- No Search Results -->
                 <div id="no-results" class="empty-state hidden glass-card">
                     <div class="empty-icon" aria-hidden="true">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -285,16 +338,14 @@
                         </svg>
                     </div>
                     <h3>No results found</h3>
-                    <p>Try a different search term.</p>
+                    <p>Try a different search or filter.</p>
                 </div>
 
-                <!-- Links Grid -->
                 <div id="links-grid" class="links-grid" role="list" aria-label="Shortened links list"></div>
             </div>
         </section>
     </main>
 
-    <!-- ── Footer ── -->
     <footer class="footer">
         <div class="container footer-inner">
             <div class="footer-logo">
@@ -326,6 +377,61 @@
             <div class="modal-actions">
                 <button class="btn-modal-cancel" id="modal-cancel">Cancel</button>
                 <button class="btn-modal-confirm" id="modal-confirm">Delete Link</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Edit Link Modal ── -->
+    <div id="edit-modal" class="modal-overlay hidden" role="dialog" aria-modal="true"
+        aria-labelledby="edit-modal-title">
+        <div class="modal-card glass-card edit-modal-card">
+            <div class="modal-icon edit-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+            </div>
+            <h3 id="edit-modal-title">Edit Link</h3>
+            <p>Update the destination URL or click limit for this short link.</p>
+
+            <div class="edit-field-group">
+                <label class="edit-label" for="edit-url-input">Destination URL</label>
+                <div class="input-wrapper edit-input-wrapper" id="edit-input-wrapper">
+                    <span class="input-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
+                            <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
+                        </svg>
+                    </span>
+                    <input type="url" id="edit-url-input" class="url-input"
+                        placeholder="https://your-new-destination.com" autocomplete="off" spellcheck="false"
+                        aria-label="New destination URL" />
+                </div>
+            </div>
+
+            <div class="edit-field-group">
+                <label class="edit-label" for="edit-limit-input">Click Limit <span class="edit-label-hint">(leave blank
+                        to remove limit)</span></label>
+                <div class="input-wrapper edit-input-wrapper">
+                    <span class="input-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                    </span>
+                    <input type="number" id="edit-limit-input" class="url-input" min="1" placeholder="No limit"
+                        aria-label="Click limit" />
+                </div>
+            </div>
+
+            <p id="edit-error" class="input-error" role="alert"></p>
+
+            <div class="modal-actions">
+                <button class="btn-modal-cancel" id="edit-cancel">Cancel</button>
+                <button class="btn-modal-confirm edit-confirm-btn" id="edit-confirm">Save Changes</button>
             </div>
         </div>
     </div>

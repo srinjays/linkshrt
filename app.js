@@ -1,134 +1,163 @@
 /**
- * LinkShrt — App Logic
- * URL Shortener with localStorage persistence, analytics, and redirection
+ * LinkShrt — Round 2 App Logic
+ * Features: URL shortening, click limits, enable/disable, edit URL,
+ *           creation timestamps, last accessed tracking, click analytics
  */
-
 'use strict';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'linkshort_links_v2';
-const BASE_URL = window.location.origin + window.location.pathname.replace(/\/?$/, '');
-const SHORT_ID_LEN = 6;
-const REDIRECT_DELAY = 2600; // ms
-const TOAST_DURATION = 3000; // ms
+const TOAST_DURATION = 3000;
+const SEARCH_DEBOUNCE = 200;
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let links = [];
-let deleteTarget = null;  // slug pending deletion
-let toastTimer = null;
+let pendingDelete = null;   // slug to delete
+let pendingEdit = null;   // slug being edited
+let searchTimer = null;
 
-// ─── Utils ───────────────────────────────────────────────────────────────────
+// ─── DOM Refs ────────────────────────────────────────────────────────────────
+const shortenForm = document.getElementById('shorten-form');
+const urlInput = document.getElementById('url-input');
+const aliasInput = document.getElementById('alias-input');
+const limitInput = document.getElementById('limit-input');
+const inputClear = document.getElementById('input-clear');
+const inputWrapper = document.getElementById('input-wrapper');
+const urlError = document.getElementById('url-error');
+const resultCard = document.getElementById('result-card');
+const resultShortUrl = document.getElementById('result-short-url');
+const resultOrigUrl = document.getElementById('result-original-url');
+const btnCopy = document.getElementById('btn-copy');
+const searchInput = document.getElementById('search-input');
+const sortSelect = document.getElementById('sort-select');
+const filterSelect = document.getElementById('filter-select');
+const linksGrid = document.getElementById('links-grid');
+const emptyState = document.getElementById('empty-state');
+const noResults = document.getElementById('no-results');
+const toast = document.getElementById('toast');
+const statTotalLinks = document.getElementById('stat-total-links');
+const statTotalClicks = document.getElementById('stat-total-clicks');
+const statActiveLinks = document.getElementById('stat-active-links');
+const statTopLink = document.getElementById('stat-top-link');
+const redirectOverlay = document.getElementById('redirect-overlay');
 
-/** Generate a random alphanumeric string of given length */
-function generateId(length = SHORT_ID_LEN) {
+// Redirect state divs
+const redirectNormal = document.getElementById('redirect-state-normal');
+const redirectDisabled = document.getElementById('redirect-state-disabled');
+const redirectExpired = document.getElementById('redirect-state-expired');
+
+// Delete modal
+const confirmModal = document.getElementById('confirm-modal');
+const modalCancel = document.getElementById('modal-cancel');
+const modalConfirm = document.getElementById('modal-confirm');
+
+// Edit modal
+const editModal = document.getElementById('edit-modal');
+const editUrlInput = document.getElementById('edit-url-input');
+const editLimitInput = document.getElementById('edit-limit-input');
+const editError = document.getElementById('edit-error');
+const editCancel = document.getElementById('edit-cancel');
+const editConfirm = document.getElementById('edit-confirm');
+const editInputWrapper = document.getElementById('edit-input-wrapper');
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function generateId(length = 6) {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
   const arr = new Uint32Array(length);
   crypto.getRandomValues(arr);
-  arr.forEach(n => (result += chars[n % chars.length]));
-  return result;
+  return [...arr].map(n => chars[n % chars.length]).join('');
 }
 
-/** Format a number with commas */
-function fmtNum(n) {
-  return n.toLocaleString();
-}
-
-/** Format ISO date string to readable form */
-function fmtDate(iso) {
-  try {
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  } catch { return ''; }
-}
-
-/** Truncate a string to maxLen chars */
-function truncate(str, maxLen = 60) {
-  return str.length > maxLen ? str.slice(0, maxLen) + '…' : str;
-}
-
-/** Basic URL validation */
 function isValidUrl(str) {
-  if (!str || !str.trim()) return false;
   try {
-    const u = new URL(str.trim());
+    const u = new URL(str);
     return u.protocol === 'http:' || u.protocol === 'https:';
   } catch { return false; }
 }
 
-/** Make sure alias only has safe chars */
-function isValidAlias(alias) {
-  return /^[a-zA-Z0-9_-]{1,20}$/.test(alias);
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
-/** Build the full "short" URL from a slug */
-function buildShortUrl(slug) {
-  return `${BASE_URL}?ls=${encodeURIComponent(slug)}`;
+function fmtNum(n) {
+  return Number(n).toLocaleString();
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', year: 'numeric'
+    });
+  } catch { return '—'; }
+}
+
+function timeAgo(iso) {
+  if (!iso) return 'Never';
+  const diff = Date.now() - new Date(iso).getTime();
+  const secs = Math.floor(diff / 1000);
+  const mins = Math.floor(secs / 60);
+  const hrs = Math.floor(mins / 60);
+  const days = Math.floor(hrs / 24);
+  if (secs < 10) return 'Just now';
+  if (secs < 60) return `${secs}s ago`;
+  if (mins < 60) return `${mins}m ago`;
+  if (hrs < 24) return `${hrs}h ago`;
+  if (days < 30) return `${days}d ago`;
+  return fmtDate(iso);
+}
+
+function getBaseUrl() {
+  return window.location.origin + window.location.pathname;
+}
+
+function getLinkStatus(link) {
+  if (link.clickLimit && link.clicks >= link.clickLimit) return 'expired';
+  if (!link.enabled) return 'disabled';
+  return 'active';
 }
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
+function saveLinks() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(links)); }
+  catch (e) {
+    if (e.name === 'QuotaExceededError') showToast('Storage full — delete old links to make room.', 'error');
+  }
+}
 
 function loadLinks() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) links = JSON.parse(raw);
+    if (raw) {
+      // Migrate old links: add new fields with defaults if missing
+      links = JSON.parse(raw).map(link => ({
+        enabled: true,
+        clickLimit: null,
+        lastAccessedAt: null,
+        ...link,
+      }));
+    }
   } catch (e) {
     console.warn('LinkShrt: Failed to load from localStorage', e);
     links = [];
   }
 }
 
-function saveLinks() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
-  } catch (e) {
-    if (e.name === 'QuotaExceededError') {
-      showToast('Storage quota exceeded. Delete some links to continue.', 'error');
-    }
-  }
-}
-
 function findLink(slug) {
-  return links.find(l => l.slug === slug);
+  return links.find(l => l.slug === slug) || null;
 }
-
-// ─── DOM Refs ─────────────────────────────────────────────────────────────────
-const $ = id => document.getElementById(id);
-const form = $('shorten-form');
-const urlInput = $('url-input');
-const aliasInput = $('alias-input');
-const urlError = $('url-error');
-const inputWrapper = $('input-wrapper');
-const inputClearBtn = $('input-clear');
-const resultCard = $('result-card');
-const resultShortUrl = $('result-short-url');
-const resultOrigUrl = $('result-original-url');
-const btnCopy = $('btn-copy');
-const statTotalLinks = $('stat-total-links');
-const statTotalClicks = $('stat-total-clicks');
-const statTopLink = $('stat-top-link');
-const linksGrid = $('links-grid');
-const emptyState = $('empty-state');
-const noResults = $('no-results');
-const searchInput = $('search-input');
-const sortSelect = $('sort-select');
-const btnClearAll = $('btn-clear-all');
-const toast = $('toast');
-const confirmModal = $('confirm-modal');
-const modalCancel = $('modal-cancel');
-const modalConfirm = $('modal-confirm');
-const redirectOverlay = $('redirect-overlay');
-const redirectDest = $('redirect-dest');
-const redirectBar = $('redirect-bar');
-const redirectLink = $('redirect-link');
 
 // ─── Toast ───────────────────────────────────────────────────────────────────
-function showToast(msg, type = 'success') {
+function showToast(msg, type = 'default') {
   toast.textContent = msg;
   toast.className = `toast show ${type}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toast.className = 'toast';
-  }, TOAST_DURATION);
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => { toast.className = 'toast'; }, TOAST_DURATION);
 }
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
@@ -140,29 +169,26 @@ function updateNavStat() {
 function updateStats() {
   const totalClicks = links.reduce((acc, l) => acc + l.clicks, 0);
   const topClicks = links.length ? Math.max(...links.map(l => l.clicks)) : 0;
+  const activeCount = links.filter(l => getLinkStatus(l) === 'active').length;
 
   animateCount(statTotalLinks, links.length);
   animateCount(statTotalClicks, totalClicks);
+  animateCount(statActiveLinks, activeCount);
   animateCount(statTopLink, topClicks);
   updateNavStat();
 }
-
 
 function animateCount(el, target) {
   const current = parseInt(el.textContent.replace(/,/g, ''), 10) || 0;
   if (current === target) return;
   const diff = target - current;
   const steps = Math.min(Math.abs(diff), 20);
-  const stepSize = diff / steps;
+  const step = diff / steps;
   let count = 0;
   const id = setInterval(() => {
     count++;
-    const val = Math.round(current + stepSize * count);
-    el.textContent = fmtNum(val);
-    if (count >= steps) {
-      el.textContent = fmtNum(target);
-      clearInterval(id);
-    }
+    el.textContent = fmtNum(Math.round(current + step * count));
+    if (count >= steps) { el.textContent = fmtNum(target); clearInterval(id); }
   }, 30);
 }
 
@@ -170,11 +196,24 @@ function animateCount(el, target) {
 function getFilteredLinks() {
   const query = searchInput.value.toLowerCase().trim();
   const sort = sortSelect.value;
+  const filter = filterSelect.value;
 
-  let result = query
-    ? links.filter(l => l.slug.toLowerCase().includes(query) || l.originalUrl.toLowerCase().includes(query))
-    : [...links];
+  let result = [...links];
 
+  // Filter by status
+  if (filter !== 'all') {
+    result = result.filter(l => getLinkStatus(l) === filter);
+  }
+
+  // Filter by search query
+  if (query) {
+    result = result.filter(l =>
+      l.slug.toLowerCase().includes(query) ||
+      l.originalUrl.toLowerCase().includes(query)
+    );
+  }
+
+  // Sort
   switch (sort) {
     case 'oldest': result.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)); break;
     case 'most-clicks': result.sort((a, b) => b.clicks - a.clicks); break;
@@ -185,365 +224,436 @@ function getFilteredLinks() {
 }
 
 function renderDashboard() {
-  updateStats();
   const filtered = getFilteredLinks();
-  const query = searchInput.value.trim();
-
-  // Show/hide empty states
   const hasLinks = links.length > 0;
   const hasResults = filtered.length > 0;
+  const isFiltered = searchInput.value.trim() !== '' || filterSelect.value !== 'all';
 
-  emptyState.classList.toggle('hidden', hasLinks || !!query);
-  noResults.classList.toggle('hidden', !query || hasResults || !hasLinks);
+  emptyState.classList.toggle('hidden', hasLinks);
+  noResults.classList.toggle('hidden', !hasLinks || hasResults || !isFiltered);
   linksGrid.classList.toggle('hidden', !hasResults);
 
-  if (!hasResults) {
-    linksGrid.innerHTML = '';
-    return;
-  }
+  if (!hasResults) { linksGrid.innerHTML = ''; updateStats(); return; }
 
   const maxClicks = Math.max(...filtered.map(l => l.clicks), 1);
 
   linksGrid.innerHTML = filtered.map((link, i) => {
-    const shortUrl = buildShortUrl(link.slug);
-    const barWidth = link.clicks > 0 ? Math.max((link.clicks / maxClicks) * 100, 4) : 0;
-    const zeroClicks = link.clicks === 0;
+    const shortUrl = `${getBaseUrl()}?ls=${link.slug}`;
+    const status = getLinkStatus(link);
+    const hasLimit = link.clickLimit && link.clickLimit > 0;
+    const pct = hasLimit
+      ? Math.min((link.clicks / link.clickLimit) * 100, 100)
+      : (link.clicks / maxClicks) * 100;
+    const isNearLimit = hasLimit && pct >= 70 && pct < 100;
+    const isAtLimit = hasLimit && link.clicks >= link.clickLimit;
+    const barClass = isAtLimit ? 'at-limit-fill' : isNearLimit ? 'near-limit' : '';
+
+    const clicksLabel = hasLimit
+      ? `${fmtNum(link.clicks)} / ${fmtNum(link.clickLimit)}`
+      : `${fmtNum(link.clicks)} clicks`;
+
+    const toggleLabel = link.enabled ? 'Enabled' : 'Enable';
+    const toggleClass = link.enabled ? 'is-enabled' : 'is-disabled';
 
     return `
-      <article class="link-card" style="animation-delay: ${i * 0.04}s" role="listitem" data-slug="${link.slug}">
+    <article class="link-card status-${status}" role="listitem" style="animation-delay:${i * 0.04}s">
+      <div class="link-card-top">
         <div class="link-card-left">
           <div class="link-meta-row">
-            <a href="${shortUrl}" class="link-short-url mono" target="_blank" rel="noopener noreferrer" 
-               title="Open short link" onclick="handleLinkClick(event, '${link.slug}')">
-              ${escapeHtml(shortUrl)}
+            <a href="${escapeHtml(shortUrl)}" class="link-short-url mono"
+               target="_blank" rel="noopener noreferrer"
+               aria-label="Short link: ls/${escapeHtml(link.slug)}">
+              ls/${escapeHtml(link.slug)}
             </a>
-            <span class="link-badge-clicks ${zeroClicks ? 'zero' : ''}" aria-label="${link.clicks} clicks">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-              ${fmtNum(link.clicks)} click${link.clicks !== 1 ? 's' : ''}
+            <span class="status-badge ${status}" aria-label="Status: ${status}">
+              ${status}
+            </span>
+            <span class="link-badge-clicks ${isAtLimit ? 'at-limit' : ''}" aria-label="${clicksLabel}">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              ${clicksLabel}
             </span>
           </div>
-          <div class="link-original" title="${escapeHtml(link.originalUrl)}">${escapeHtml(truncate(link.originalUrl, 72))}</div>
-          <div class="link-date">Created ${fmtDate(link.createdAt)}</div>
-          <div class="click-bar-wrapper" aria-hidden="true">
-            <div class="click-bar-track">
-              <div class="click-bar-fill" style="width: ${barWidth}%"></div>
-            </div>
+          <div class="link-original" title="${escapeHtml(link.originalUrl)}">
+            ${escapeHtml(link.originalUrl)}
+          </div>
+          <div class="link-timestamps">
+            <span class="link-ts">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Created ${fmtDate(link.createdAt)}
+            </span>
+            <span class="ts-dot">·</span>
+            <span class="link-ts">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              Last accessed: ${timeAgo(link.lastAccessedAt)}
+            </span>
           </div>
         </div>
-        <div class="link-card-right">
-          <button class="btn-card copy-card" title="Copy short URL" aria-label="Copy short URL for ${escapeHtml(link.slug)}"
-                  onclick="copyCardUrl('${link.slug}', this)">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        <div class="link-card-actions">
+          <button class="btn-toggle ${toggleClass}"
+            onclick="window.toggleEnabled('${escapeHtml(link.slug)}')"
+            title="${link.enabled ? 'Disable this link' : 'Enable this link'}"
+            aria-label="${link.enabled ? 'Disable' : 'Enable'} link ls/${escapeHtml(link.slug)}">
+            ${link.enabled
+        ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polyline points="20 6 9 17 4 12"/></svg>'
+        : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>'
+      }
+            <span>${toggleLabel}</span>
           </button>
-          <button class="btn-card delete-card" title="Delete link" aria-label="Delete link ${escapeHtml(link.slug)}"
-                  onclick="confirmDelete('${link.slug}')">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+          <button class="btn-card edit-card"
+            onclick="window.openEditModal('${escapeHtml(link.slug)}')"
+            title="Edit destination URL" aria-label="Edit link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn-card copy-card"
+            onclick="window.copyCardUrl('${escapeHtml(shortUrl)}', this)"
+            title="Copy short URL" aria-label="Copy short URL">
+            <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          </button>
+          <button class="btn-card delete-card"
+            onclick="window.confirmDelete('${escapeHtml(link.slug)}')"
+            title="Delete link" aria-label="Delete link ls/${escapeHtml(link.slug)}">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
           </button>
         </div>
-      </article>
-    `;
+      </div>
+
+      ${hasLimit || link.clicks > 0 ? `
+      <div class="click-bar-wrapper">
+        ${hasLimit ? `<div class="click-bar-meta"><span>${fmtNum(link.clicks)} used</span><span>${fmtNum(link.clickLimit)} limit</span></div>` : ''}
+        <div class="click-bar-track">
+          <div class="click-bar-fill ${barClass}" style="width:${pct.toFixed(1)}%"></div>
+        </div>
+      </div>` : ''}
+    </article>`;
   }).join('');
+
+  updateStats();
 }
 
-/** Safe HTML escape */
-function escapeHtml(str) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-  return String(str).replace(/[&<>"']/g, m => map[m]);
-}
-
-// ─── Shortening ───────────────────────────────────────────────────────────────
-function shortenUrl(originalUrl, customAlias) {
-  // Validate URL
-  if (!isValidUrl(originalUrl)) {
-    showError('Please enter a valid URL starting with http:// or https://');
-    return;
-  }
-
-  // Validate alias if provided
-  let slug = '';
-  if (customAlias) {
-    if (!isValidAlias(customAlias)) {
-      showError('Alias can only contain letters, numbers, hyphens and underscores (max 20 chars).');
-      return;
-    }
-    if (findLink(customAlias)) {
-      showError(`The alias "${customAlias}" is already in use. Try a different one.`);
-      return;
-    }
-    slug = customAlias;
-  } else {
-    // Generate unique slug
-    let attempts = 0;
-    do {
-      slug = generateId(SHORT_ID_LEN);
-      attempts++;
-      if (attempts > 50) { showError('Could not generate a unique ID. Please try again.'); return; }
-    } while (findLink(slug));
-  }
-
-  const newLink = {
-    slug,
-    originalUrl: originalUrl.trim(),
-    clicks: 0,
-    createdAt: new Date().toISOString(),
-  };
-
-  links.unshift(newLink);
-  saveLinks();
-  renderDashboard();
-
-  // Show result
-  const shortUrl = buildShortUrl(slug);
-  resultShortUrl.textContent = shortUrl;
-  resultShortUrl.href = shortUrl;
-  resultOrigUrl.textContent = truncate(originalUrl.trim(), 80);
-  resultCard.classList.remove('hidden');
-  resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-  // Reset copy button
-  resetCopyBtn();
-
-  // Clear form
-  urlInput.value = '';
-  aliasInput.value = '';
-  inputClearBtn.classList.remove('visible');
-  clearError();
-
-  showToast(`✓ Link shortened! ls/${slug}`, 'success');
-}
-
-function showError(msg) {
-  urlError.textContent = msg;
-  inputWrapper.classList.add('error');
-  urlInput.focus();
-}
+// ─── URL Shortening ───────────────────────────────────────────────────────────
 function clearError() {
   urlError.textContent = '';
   inputWrapper.classList.remove('error');
 }
 
-// ─── Copy ─────────────────────────────────────────────────────────────────────
-async function copyToClipboard(text) {
+function setError(msg) {
+  urlError.textContent = msg;
+  inputWrapper.classList.add('error');
+}
+
+shortenForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  clearError();
+
+  const rawUrl = urlInput.value.trim();
+  const rawAlias = aliasInput.value.trim();
+  const rawLimit = limitInput.value.trim();
+
+  if (!rawUrl) { setError('Please enter a URL.'); urlInput.focus(); return; }
+  if (!isValidUrl(rawUrl)) { setError('Please enter a valid URL starting with http:// or https://'); urlInput.focus(); return; }
+
+  // Alias validation
+  let slug = rawAlias;
+  if (slug) {
+    if (!/^[a-zA-Z0-9_-]{1,20}$/.test(slug)) {
+      setError('Alias must be 1–20 characters: letters, numbers, hyphens, underscores only.');
+      aliasInput.focus(); return;
+    }
+    if (findLink(slug)) {
+      setError(`Alias "ls/${slug}" is already taken. Choose another.`);
+      aliasInput.focus(); return;
+    }
+  } else {
+    do { slug = generateId(6); } while (findLink(slug));
+  }
+
+  // Click limit validation
+  let clickLimit = null;
+  if (rawLimit) {
+    clickLimit = parseInt(rawLimit, 10);
+    if (isNaN(clickLimit) || clickLimit < 1) {
+      setError('Click limit must be a positive number.');
+      limitInput.focus(); return;
+    }
+  }
+
+  const link = {
+    slug,
+    originalUrl: rawUrl,
+    clicks: 0,
+    createdAt: new Date().toISOString(),
+    lastAccessedAt: null,
+    enabled: true,
+    clickLimit,
+  };
+
+  links.unshift(link);
+  saveLinks();
+  renderDashboard();
+  showToast('✓ Short link created!', 'success');
+
+  // Show result card
+  const shortUrl = `${getBaseUrl()}?ls=${slug}`;
+  resultShortUrl.textContent = shortUrl;
+  resultShortUrl.href = shortUrl;
+  resultOrigUrl.textContent = rawUrl;
+  resultCard.classList.remove('hidden');
+
+  // Reset form
+  urlInput.value = '';
+  aliasInput.value = '';
+  limitInput.value = '';
+  inputClear.classList.remove('visible');
+  clearError();
+});
+
+// ─── Copy ────────────────────────────────────────────────────────────────────
+async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    // Fallback for older browsers
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
-      document.body.appendChild(ta);
-      ta.select(); document.execCommand('copy');
-      document.body.removeChild(ta);
-      return true;
-    } catch { return false; }
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
   }
-}
-
-function resetCopyBtn() {
-  btnCopy.querySelector('.copy-icon').classList.remove('hidden');
-  btnCopy.querySelector('.check-icon').classList.add('hidden');
-  btnCopy.classList.remove('copied');
-  btnCopy.childNodes[2].textContent = ' Copy'; // text node
 }
 
 btnCopy.addEventListener('click', async () => {
-  const url = resultShortUrl.textContent;
-  const ok = await copyToClipboard(url);
+  const ok = await copyText(resultShortUrl.textContent);
   if (ok) {
+    btnCopy.classList.add('copied');
     btnCopy.querySelector('.copy-icon').classList.add('hidden');
     btnCopy.querySelector('.check-icon').classList.remove('hidden');
-    btnCopy.classList.add('copied');
-    // Update text node
-    const textNodes = [...btnCopy.childNodes].filter(n => n.nodeType === 3);
-    if (textNodes.length) textNodes[textNodes.length - 1].textContent = ' Copied!';
+    btnCopy.querySelector('span:last-child') && (btnCopy.lastChild.textContent = '');
+    setTimeout(() => {
+      btnCopy.classList.remove('copied');
+      btnCopy.querySelector('.copy-icon').classList.remove('hidden');
+      btnCopy.querySelector('.check-icon').classList.add('hidden');
+    }, 2000);
     showToast('Copied to clipboard!', 'success');
-    setTimeout(resetCopyBtn, 2500);
-  } else {
-    showToast('Could not copy – please select manually.', 'error');
   }
 });
 
-// Card copy
-window.copyCardUrl = async function (slug, btn) {
-  const url = buildShortUrl(slug);
-  const ok = await copyToClipboard(url);
+window.copyCardUrl = async (url, btn) => {
+  const ok = await copyText(url);
   if (ok) {
-    const origColor = btn.style.color;
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="20 6 9 17 4 12"/></svg>';
     btn.style.color = 'var(--accent-green)';
+    setTimeout(() => {
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+      btn.style.color = '';
+    }, 2000);
     showToast('Copied to clipboard!', 'success');
-    setTimeout(() => { btn.style.color = origColor; }, 1500);
-  } else {
-    showToast('Could not copy.', 'error');
   }
 };
 
-// ─── Redirection ──────────────────────────────────────────────────────────────
+// ─── Input Clear Button ───────────────────────────────────────────────────────
+urlInput.addEventListener('input', () => {
+  inputClear.classList.toggle('visible', urlInput.value.length > 0);
+  clearError();
+});
+inputClear.addEventListener('click', () => {
+  urlInput.value = '';
+  inputClear.classList.remove('visible');
+  clearError();
+  urlInput.focus();
+});
+
+// ─── Toggle Enable/Disable ───────────────────────────────────────────────────
+window.toggleEnabled = (slug) => {
+  const link = findLink(slug);
+  if (!link) return;
+  link.enabled = !link.enabled;
+  saveLinks();
+  renderDashboard();
+  showToast(
+    link.enabled ? `✓ Link ls/${slug} enabled.` : `⏸ Link ls/${slug} disabled.`,
+    link.enabled ? 'success' : 'default'
+  );
+};
+
+// ─── Delete ──────────────────────────────────────────────────────────────────
+window.confirmDelete = (slug) => {
+  pendingDelete = slug;
+  document.getElementById('modal-body').textContent =
+    `Short link "ls/${slug}" will be permanently removed.`;
+  confirmModal.classList.remove('hidden');
+};
+
+modalCancel.addEventListener('click', () => {
+  pendingDelete = null;
+  confirmModal.classList.add('hidden');
+});
+
+modalConfirm.addEventListener('click', () => {
+  if (pendingDelete) {
+    links = links.filter(l => l.slug !== pendingDelete);
+    saveLinks();
+    renderDashboard();
+    showToast(`Link ls/${pendingDelete} deleted.`);
+    pendingDelete = null;
+  }
+  confirmModal.classList.add('hidden');
+});
+
+// Clear All
+document.getElementById('btn-clear-all').addEventListener('click', () => {
+  if (links.length === 0) { showToast('Nothing to clear.'); return; }
+  pendingDelete = '__ALL__';
+  document.getElementById('modal-title').textContent = 'Clear all links?';
+  document.getElementById('modal-body').textContent =
+    `This will permanently delete all ${links.length} link${links.length > 1 ? 's' : ''} and their analytics.`;
+  confirmModal.classList.remove('hidden');
+});
+
+// Override confirm for clear all
+const origConfirm = modalConfirm.onclick;
+modalConfirm.addEventListener('click', () => {
+  if (pendingDelete === '__ALL__') {
+    links = [];
+    saveLinks();
+    renderDashboard();
+    resultCard.classList.add('hidden');
+    showToast('All links cleared.');
+    document.getElementById('modal-title').textContent = 'Delete this link?';
+    pendingDelete = null;
+    confirmModal.classList.add('hidden');
+  }
+});
+
+// ─── Edit Link ────────────────────────────────────────────────────────────────
+window.openEditModal = (slug) => {
+  const link = findLink(slug);
+  if (!link) return;
+  pendingEdit = slug;
+  editUrlInput.value = link.originalUrl;
+  editLimitInput.value = link.clickLimit || '';
+  editError.textContent = '';
+  editInputWrapper.classList.remove('error');
+  editModal.classList.remove('hidden');
+  setTimeout(() => editUrlInput.focus(), 50);
+};
+
+editCancel.addEventListener('click', () => {
+  pendingEdit = null;
+  editModal.classList.add('hidden');
+});
+
+editConfirm.addEventListener('click', () => {
+  const link = findLink(pendingEdit);
+  if (!link) return;
+
+  const newUrl = editUrlInput.value.trim();
+  const newLimit = editLimitInput.value.trim();
+
+  if (!newUrl) {
+    editError.textContent = 'URL cannot be empty.';
+    editInputWrapper.classList.add('error');
+    editUrlInput.focus(); return;
+  }
+  if (!isValidUrl(newUrl)) {
+    editError.textContent = 'Please enter a valid URL (http:// or https://).';
+    editInputWrapper.classList.add('error');
+    editUrlInput.focus(); return;
+  }
+
+  let clickLimit = null;
+  if (newLimit) {
+    clickLimit = parseInt(newLimit, 10);
+    if (isNaN(clickLimit) || clickLimit < 1) {
+      editError.textContent = 'Click limit must be a positive number, or leave blank to remove.';
+      editLimitInput.focus(); return;
+    }
+  }
+
+  link.originalUrl = newUrl;
+  link.clickLimit = clickLimit;
+  saveLinks();
+  renderDashboard();
+  showToast(`✓ Link ls/${pendingEdit} updated.`, 'success');
+  pendingEdit = null;
+  editModal.classList.add('hidden');
+});
+
+// Close edit modal on overlay click
+editModal.addEventListener('click', (e) => { if (e.target === editModal) editCancel.click(); });
+confirmModal.addEventListener('click', (e) => { if (e.target === confirmModal) modalCancel.click(); });
+
+// ─── Search & Sort ────────────────────────────────────────────────────────────
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(renderDashboard, SEARCH_DEBOUNCE);
+});
+sortSelect.addEventListener('change', renderDashboard);
+filterSelect.addEventListener('change', renderDashboard);
+
+// ─── Redirect Handler ─────────────────────────────────────────────────────────
+function showRedirectState(state) {
+  // Show overlay
+  redirectOverlay.classList.remove('hidden');
+  // Show correct state, hide others
+  redirectNormal.classList.toggle('hidden', state !== 'normal');
+  redirectDisabled.classList.toggle('hidden', state !== 'disabled');
+  redirectExpired.classList.toggle('hidden', state !== 'expired');
+}
+
 function checkRedirect() {
   const params = new URLSearchParams(window.location.search);
   const slug = params.get('ls');
   if (!slug) return;
 
   const link = findLink(slug);
+
   if (!link) {
     showToast(`Short link "ls/${slug}" not found.`, 'error');
-    // Clean URL
     window.history.replaceState({}, '', window.location.pathname);
     return;
   }
 
-  // Increment click count
+  // ── Check: link disabled ──
+  if (!link.enabled) {
+    showRedirectState('disabled');
+    return;
+  }
+
+  // ── Check: click limit reached ──
+  if (link.clickLimit && link.clicks >= link.clickLimit) {
+    showRedirectState('expired');
+    return;
+  }
+
+  // ── Normal redirect ──
   link.clicks++;
+  link.lastAccessedAt = new Date().toISOString();
   saveLinks();
 
-  // Show redirect overlay
-  redirectDest.textContent = truncate(link.originalUrl, 80);
-  redirectLink.href = link.originalUrl;
-  redirectOverlay.classList.remove('hidden');
+  const dest = link.originalUrl;
+  document.getElementById('redirect-dest').textContent = dest;
+  document.getElementById('redirect-link').href = dest;
+  showRedirectState('normal');
 
-  // Start progress bar animation
+  // Animate progress bar
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      redirectBar.style.width = '100%';
+      document.getElementById('redirect-bar').style.width = '100%';
     });
   });
 
-  // Redirect after delay
-  const timer = setTimeout(() => {
-    window.location.href = link.originalUrl;
-  }, REDIRECT_DELAY);
-
-  // Allow manual click
-  redirectLink.addEventListener('click', () => clearTimeout(timer));
+  setTimeout(() => { window.location.href = dest; }, 2600);
 }
 
-// Intercept link card clicks that are actually redirects (in same tab context)
-window.handleLinkClick = function (e, slug) {
-  // Let the browser handle it normally (opens in new tab due to target=_blank)
-  // The new tab will hit checkRedirect()
-};
-
-// ─── Delete ───────────────────────────────────────────────────────────────────
-window.confirmDelete = function (slug) {
-  deleteTarget = slug;
-  confirmModal.classList.remove('hidden');
-};
-
-modalCancel.addEventListener('click', () => {
-  confirmModal.classList.add('hidden');
-  deleteTarget = null;
-});
-
-modalConfirm.addEventListener('click', () => {
-  if (!deleteTarget) return;
-
-  if (deleteTarget === '__clear_all__') {
-    // Clear all links
-    links = [];
-    saveLinks();
-    renderDashboard();
-    resultCard.classList.add('hidden');
-    confirmModal.classList.add('hidden');
-    deleteTarget = null;
-    $('modal-title').textContent = 'Delete this link?';
-    $('modal-body').textContent = 'This action cannot be undone. The short link will stop working immediately.';
-    showToast('All links cleared.', 'error');
-  } else {
-    // Delete single link
-    links = links.filter(l => l.slug !== deleteTarget);
-    saveLinks();
-    renderDashboard();
-    confirmModal.classList.add('hidden');
-    deleteTarget = null;
-    resultCard.classList.add('hidden');
-    showToast('Link deleted.', 'error');
-  }
-});
-
-// Close modal on backdrop click
-confirmModal.addEventListener('click', e => {
-  if (e.target === confirmModal) {
-    confirmModal.classList.add('hidden');
-    deleteTarget = null;
-    $('modal-title').textContent = 'Delete this link?';
-    $('modal-body').textContent = 'This action cannot be undone. The short link will stop working immediately.';
-  }
-});
-
-// ─── Clear All ────────────────────────────────────────────────────────────────
-btnClearAll.addEventListener('click', () => {
-  if (!links.length) { showToast('No links to clear.', 'error'); return; }
-
-  // Reuse modal with clear-all context
-  deleteTarget = '__clear_all__';
-  $('modal-title').textContent = 'Clear all links?';
-  $('modal-body').textContent = `This will permanently delete all ${links.length} link${links.length !== 1 ? 's' : ''} and their analytics.`;
-  confirmModal.classList.remove('hidden');
-});
-
-// ─── Form Events ──────────────────────────────────────────────────────────────
-form.addEventListener('submit', e => {
-  e.preventDefault();
-  clearError();
-  const url = urlInput.value.trim();
-  const alias = aliasInput.value.trim();
-  shortenUrl(url, alias);
-});
-
-urlInput.addEventListener('input', () => {
-  clearError();
-  inputClearBtn.classList.toggle('visible', urlInput.value.length > 0);
-});
-
-inputClearBtn.addEventListener('click', () => {
-  urlInput.value = '';
-  urlInput.focus();
-  inputClearBtn.classList.remove('visible');
-  clearError();
-  resultCard.classList.add('hidden');
-});
-
-urlInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); form.dispatchEvent(new Event('submit')); }
-});
-
-// Paste and auto-strip whitespace
-urlInput.addEventListener('paste', e => {
-  setTimeout(() => {
-    urlInput.value = urlInput.value.trim();
-    inputClearBtn.classList.toggle('visible', urlInput.value.length > 0);
-  }, 0);
-});
-
-// ─── Search & Sort ────────────────────────────────────────────────────────────
-let searchDebounce = null;
-searchInput.addEventListener('input', () => {
-  clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(renderDashboard, 200);
-});
-sortSelect.addEventListener('change', renderDashboard);
-
-// ─── Keyboard Shortcuts ───────────────────────────────────────────────────────
-document.addEventListener('keydown', e => {
-  // Escape closes modals
-  if (e.key === 'Escape') {
-    confirmModal.classList.add('hidden');
-    deleteTarget = null;
-  }
-  // Ctrl/Cmd + K focuses URL input
-  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-    e.preventDefault();
-    urlInput.focus();
-    urlInput.select();
-  }
-});
-
-// ─── Nav Active State ────────────────────────────────────────────────────────
+// ─── Nav Active Pills ─────────────────────────────────────────────────────────
 function initNavPills() {
   const pills = document.querySelectorAll('.nav-pill');
   const dashboard = document.getElementById('dashboard');
 
-  // Click: toggle active
   pills.forEach(pill => {
     pill.addEventListener('click', () => {
       pills.forEach(p => p.classList.remove('active-pill'));
@@ -551,7 +661,6 @@ function initNavPills() {
     });
   });
 
-  // Scroll: switch between Home and Dashboard pill
   if (dashboard) {
     const observer = new IntersectionObserver(entries => {
       entries.forEach(entry => {
@@ -571,15 +680,12 @@ function initNavPills() {
   }
 }
 
-// ─── Init ────────────────────────────────────────────────────────────────────
+// ─── Init ─────────────────────────────────────────────────────────────────────
 function init() {
   loadLinks();
   checkRedirect();
   renderDashboard();
   initNavPills();
-
-  // Trigger progress bar animation if on redirect
-  if (!redirectOverlay.classList.contains('hidden')) return;
 }
 
 init();
